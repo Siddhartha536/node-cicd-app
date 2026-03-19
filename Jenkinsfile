@@ -17,30 +17,26 @@ pipeline {
         }
 
         stage('Install & Test') {
-            agent {
-                docker {
-                    image 'node:18-alpine'
-                    reuseNode true
-                }
-            }
             steps {
                 echo 'Installing dependencies and running tests...'
-                sh 'npm ci'
-                sh 'npm test'
-            }
-            post {
-                failure {
-                    echo 'Test failed - pipeline stopped. fix test before merging'
-                }
+                sh '''
+                    docker run --rm \
+                    -v $PWD:/app \
+                    -w /app \
+                    node:18-alpine \
+                    sh -c "npm ci && npm test"
+                '''
             }
         }
-        stage('Build Docker Image'){
+
+        stage('Build Docker Image') {
             steps {
                 echo "Building Image : ${IMAGE}:${TAG}"
-                sh "docker build -t ${IMAGE}:${TAG} -t${IMAGE}:latest ."
+                sh "docker build -t ${IMAGE}:${TAG} -t ${IMAGE}:latest ."
             }
         }
-        stage ('Push to Docker Hub'){
+
+        stage('Push to Docker Hub') {
             when {
                 branch 'main'
             }
@@ -49,10 +45,10 @@ pipeline {
                 withCredentials([usernamePassword(
                     credentialsId: 'dockerhub-credentials',
                     usernameVariable: 'DOCKER_USER',
-                    passswordVariable: 'DOCKER_PASS'
+                    passwordVariable: 'DOCKER_PASS'
                 )]) {
                     sh '''
-                        echo "$DOCKER_PASS" || docker login -u "$DOCKER_USER" --password-stdin
+                        echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
                         docker push ${IMAGE}:${TAG}
                         docker push ${IMAGE}:latest
                         docker logout
@@ -60,6 +56,7 @@ pipeline {
                 }
             }
         }
+
         stage('Deploy') {
             when {
                 branch 'main'
@@ -67,33 +64,31 @@ pipeline {
             steps {
                 echo 'Deploying....'
                 sh '''
-                # stop existing container if running
-                docker stop ${APP_NAME} || true
-                docker rm {APP_NAME} || true
+                    docker stop ${APP_NAME} || true
+                    docker rm ${APP_NAME} || true
 
-                # Run the newly built image
-                docker run -d \
-                    --name ${APP_NAME} \
-                    -p 3000:3000 \
-                    -e NODE_ENV=production
-                    -e APP_VERSION=${TAG} \
-                    --restart unless-stopped \
-                    ${IMAGE}:${TAG}
+                    docker run -d \
+                        --name ${APP_NAME} \
+                        -p 3000:3000 \
+                        -e NODE_ENV=production \
+                        -e APP_VERSION=${TAG} \
+                        --restart unless-stopped \
+                        ${IMAGE}:${TAG}
 
-                echo "App running at http://localhost:3000"
+                    echo "App running at http://localhost:3000"
                 '''
             }
         }
     }
+
     post {
         success {
             echo "Build #${BUILD_NUMBER} passed all stages."
         }
         failure {
-            echo "Build #${BUILD_NUMBER} failed. Check stage logs above. "
+            echo "Build #${BUILD_NUMBER} failed. Check logs."
         }
         always {
-            // Delete workspace to keep jenkins disk clean
             cleanWs()
         }
     }
